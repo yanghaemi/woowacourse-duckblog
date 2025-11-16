@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"time"
 
 	"net/http"
 
@@ -51,17 +52,40 @@ func initDB() {
 		dbUser, dbPass, dbHost, dbPort, dbName)
 
 	var err error
-	db, err = gorm.Open(mysql.Open(dsn), &gorm.Config{})
-	if err != nil {
-		log.Fatalf("failed to connect database: %v", err)
+	// DB 연결 재시도 (최대 10초)
+	for i := 0; i < 10; i++ {
+		db, err = gorm.Open(mysql.Open(dsn), &gorm.Config{})
+		if err == nil {
+			break
+		}
+		log.Printf("Failed to connect to database, retrying... (%d/10)", i+1)
+		time.Sleep(1 * time.Second)
 	}
+	if err != nil {
+		log.Fatalf("failed to connect database after retries: %v", err)
+	}
+	log.Println("Database connected successfully")
+
+	// 커넥션 풀 설정
+	sqlDB, err := db.DB()
+	if err != nil {
+		log.Fatalf("failed to get database instance: %v", err)
+	}
+
+	// 최대 연결 수
+	sqlDB.SetMaxOpenConns(300) // 동시에 열 수 있는 최대 연결 = 100개
+
+	// 유휴 연결 수
+	sqlDB.SetMaxIdleConns(10) // 대기 상태 연결 = 10개 (재사용)
+
+	// 연결 재사용 시간
+	sqlDB.SetConnMaxLifetime(time.Hour) // 1시간 후 연결 재생성
 
 	// 테이블 자동 생성 (마이그레이션)
 	err = db.AutoMigrate(&Album{})
 	if err != nil {
 		log.Fatalf("failed to migrate database: %v", err)
 	}
-
 }
 
 // GET /albums
