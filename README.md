@@ -36,9 +36,9 @@
 
 > k6 또는 vegeta 사용 예정
 
-- `GET /api/posts` → **1초당 1000 요청**
-- `POST /api/posts/:id/like` → **1초당 500 요청**
-- `GET /api/calendar/events` → **1초당 300 요청**
+- `GET /api/albums` → **1초당 1000 요청**
+- `POST /api/albums` → **1초당 500 요청**
+- `PATCH /api/albums/:id` → **1초당 300 요청**
 
 ---
 
