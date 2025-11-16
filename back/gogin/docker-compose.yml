@@ -1,0 +1,28 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      DB_HOST: mysql  # 컨테이너 이름으로 접근
+      DB_PORT: 3306
+      DB_NAME: duckblog
+      DB_USER: duck
+      DB_PASSWORD: duckpass
+  mysql:
+    image: mysql:8.0
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: 
+      MYSQL_DATABASE: duckblog
+      MYSQL_USER: duck
+      MYSQL_PASSWORD: duckpass
+    ports:
+      - "3310:3306"
+    volumes:
+      - mysql_data_duckblog:/var/lib/mysql
+
+volumes:
+  mysql_data_duckblog:
