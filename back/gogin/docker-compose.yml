@@ -5,17 +5,21 @@ services:
       dockerfile: Dockerfile
     ports:
       - "8080:8080"
+    depends_on:
+      - mysql
+      - redis
     environment:
       DB_HOST: mysql  # 컨테이너 이름으로 접근
       DB_PORT: 3306
       DB_NAME: duckblog
       DB_USER: duck
       DB_PASSWORD: duckpass
+      REDIS_ADDR: redis:6379
   mysql:
     image: mysql:8.0
     restart: unless-stopped
     environment:
-      MYSQL_ROOT_PASSWORD: 
+      MYSQL_ROOT_PASSWORD: rootpass123   
       MYSQL_DATABASE: duckblog
       MYSQL_USER: duck
       MYSQL_PASSWORD: duckpass
@@ -23,6 +27,12 @@ services:
       - "3310:3306"
     volumes:
       - mysql_data_duckblog:/var/lib/mysql
+  redis:
+    image: redis:latest      
+    container_name: duckblog-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
 
 volumes:
   mysql_data_duckblog:

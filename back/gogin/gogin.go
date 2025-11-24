@@ -1,9 +1,12 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
+	"time"
 
 	"net/http"
 
@@ -14,6 +17,10 @@ import (
 	"github.com/gin-contrib/cors"
 
 	"gorm.io/gorm"
+
+	"github.com/redis/go-redis/v9"
+
+	"github.com/joho/godotenv"
 )
 
 type Album struct {
@@ -30,12 +37,61 @@ type UpdateAlbumRequest struct {
 	Price  *float64 `json:"price"`
 }
 
-// // albums slice to seed record album data.
-// var albums = []album{
-// 	{ID: "1", Title: "Blue Train", Artist: "John Coltrane", Price: 56.99},
-// 	{ID: "2", Title: "Jeru", Artist: "Gerry Mulligan", Price: 17.99},
-// 	{ID: "3", Title: "Sarah Vaughan and Clifford Brown", Artist: "Sarah Vaughan", Price: 39.99},
-// }
+var (
+	rdb  *redis.Client
+	rctx = context.Background()
+)
+
+func initRedis() {
+	addr := os.Getenv("REDIS_ADDR")
+	if addr == "" {
+		addr = "localhost:6379"
+	}
+
+	password := getEnv("REDIS_PASSWORD", "")
+
+	rdb = redis.NewClient(&redis.Options{
+		Addr:         addr,
+		Password:     password,
+		DB:           0,
+		PoolSize:     200, // 동시 연결 수
+		MinIdleConns: 20,
+		MaxRetries:   5,
+	})
+
+	if err := pingRedis(); err != nil {
+		log.Printf("Warning: Redis connection failed: %v. Running without cache.", err)
+		if rdb != nil {
+			_ = rdb.Close()
+		}
+		rdb = nil // Redis 사용 불가 표시
+		return    // 실패 시 함수 끝
+	}
+	log.Println("Redis connected successfully")
+}
+
+func pingRedis() error {
+	ctx, cancel := context.WithTimeout(rctx, 2*time.Second)
+	defer cancel()
+
+	if err := rdb.Ping(ctx).Err(); err != nil {
+		return err
+	}
+	return nil
+}
+
+// 캐시 무효화 함수
+func invalidateAlbumsCache() {
+	if rdb != nil {
+		if err := rdb.Del(rctx, albumsCacheKey).Err(); err != nil {
+			log.Printf("Failed to invalidate cache: %v", err)
+		}
+	}
+}
+
+// 캐시 키 상수
+const albumsCacheKey = "albums:all"
+const albumsCacheTTL = 10 * time.Second
 
 var db *gorm.DB
 
@@ -51,32 +107,73 @@ func initDB() {
 		dbUser, dbPass, dbHost, dbPort, dbName)
 
 	var err error
-	db, err = gorm.Open(mysql.Open(dsn), &gorm.Config{})
-	if err != nil {
-		log.Fatalf("failed to connect database: %v", err)
+	// DB 연결 재시도 (최대 10초)
+	for i := 0; i < 10; i++ {
+		db, err = gorm.Open(mysql.Open(dsn), &gorm.Config{})
+		if err == nil {
+			break
+		}
+		log.Printf("Failed to connect to database, retrying... (%d/10)", i+1)
+		time.Sleep(1 * time.Second)
 	}
+	if err != nil {
+		log.Fatalf("failed to connect database after retries: %v", err)
+	}
+	log.Println("Database connected successfully")
+
+	// 커넥션 풀 설정
+	sqlDB, err := db.DB()
+	if err != nil {
+		log.Fatalf("failed to get database instance: %v", err)
+	}
+
+	// 최대 연결 수
+	sqlDB.SetMaxOpenConns(300) // 동시에 열 수 있는 최대 연결 = 100개
+
+	// 유휴 연결 수
+	sqlDB.SetMaxIdleConns(10) // 대기 상태 연결 = 10개 (재사용)
+
+	// 연결 재사용 시간
+	sqlDB.SetConnMaxLifetime(time.Hour) // 1시간 후 연결 재생성
 
 	// 테이블 자동 생성 (마이그레이션)
 	err = db.AutoMigrate(&Album{})
 	if err != nil {
 		log.Fatalf("failed to migrate database: %v", err)
 	}
-
 }
 
 // GET /albums
 // 모든 앨범 조회 (Read - List)
 func getAlbums(c *gin.Context) {
-	var albums []Album
-	result := db.Find(&albums)
 
-	if result.Error != nil {
-		// 500
-		c.JSON(http.StatusInternalServerError, gin.H{"error": result.Error.Error()})
+	// 1) Redis 캐시 먼저 조회
+	// 처음엔 DB로 접근하지만 이후 동일한 /albums 요청은 Redis에서 바로 꺼내서 리턴하여 훨씬 가벼워진다.
+	if rdb != nil {
+		if data, err := rdb.Get(rctx, albumsCacheKey).Bytes(); err == nil && len(data) > 0 {
+			var albums []Album
+			if err := json.Unmarshal(data, &albums); err == nil {
+				c.JSON(http.StatusOK, albums)
+				return
+			}
+		}
+	}
+
+	// 2) 캐시 미스 -> DB 조회
+	var albums []Album
+	if err := db.Find(&albums).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch albums"})
 		return
 	}
 
-	c.IndentedJSON(http.StatusOK, albums)
+	// 3) DB 결과물 Redis에 캐싱
+	if rdb != nil {
+		if b, err := json.Marshal(albums); err == nil {
+			_ = rdb.Set(rctx, albumsCacheKey, b, albumsCacheTTL).Err()
+		}
+	}
+
+	c.JSON(http.StatusOK, albums)
 }
 
 // GET /albums/:id
@@ -100,7 +197,7 @@ func getAlbumByID(c *gin.Context) {
 }
 
 // POST /albums
-// 새 앨범 생성 (Create)
+// 새 앨범 생성 (Create) + Redis 캐시 무효화
 func postAlbums(c *gin.Context) {
 	var newAlbum Album
 
@@ -116,6 +213,8 @@ func postAlbums(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": result.Error.Error()})
 		return
 	}
+
+	invalidateAlbumsCache() // 캐시 무효화
 
 	c.IndentedJSON(http.StatusCreated, newAlbum)
 }
@@ -150,6 +249,8 @@ func updateAlbum(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": result.Error.Error()})
 		return
 	}
+
+	invalidateAlbumsCache() // 캐시 무효화
 
 	c.IndentedJSON(http.StatusOK, req)
 }
@@ -199,6 +300,9 @@ func patchAlbum(c *gin.Context) {
 
 	// 업데이트된 데이터 다시 조회
 	db.First(&album, id)
+
+	invalidateAlbumsCache() // 캐시 무효화
+
 	c.IndentedJSON(http.StatusOK, album)
 }
 
@@ -225,12 +329,19 @@ func deleteAlbum(c *gin.Context) {
 		return
 	}
 
+	invalidateAlbumsCache() // 캐시 무효화
+
 	c.Status(http.StatusNoContent) // 204
 }
 
 func main() {
 
+	if err := godotenv.Load(); err != nil {
+		log.Println("No .env file found, using system environment variables")
+	}
+
 	initDB()
+	initRedis() // Redis 초기화
 
 	r := gin.Default()
 	r.GET("/ping", func(c *gin.Context) {
