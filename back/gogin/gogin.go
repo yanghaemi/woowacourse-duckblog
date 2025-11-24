@@ -197,7 +197,7 @@ func getAlbumByID(c *gin.Context) {
 }
 
 // POST /albums
-// 새 앨범 생성 (Create)
+// 새 앨범 생성 (Create) + Redis 캐시 무효화
 func postAlbums(c *gin.Context) {
 	var newAlbum Album
 
@@ -213,6 +213,8 @@ func postAlbums(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": result.Error.Error()})
 		return
 	}
+
+	invalidateAlbumsCache() // 캐시 무효화
 
 	c.IndentedJSON(http.StatusCreated, newAlbum)
 }
@@ -247,6 +249,8 @@ func updateAlbum(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": result.Error.Error()})
 		return
 	}
+
+	invalidateAlbumsCache() // 캐시 무효화
 
 	c.IndentedJSON(http.StatusOK, req)
 }
@@ -296,6 +300,9 @@ func patchAlbum(c *gin.Context) {
 
 	// 업데이트된 데이터 다시 조회
 	db.First(&album, id)
+
+	invalidateAlbumsCache() // 캐시 무효화
+
 	c.IndentedJSON(http.StatusOK, album)
 }
 
@@ -321,6 +328,8 @@ func deleteAlbum(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": result.Error.Error()})
 		return
 	}
+
+	invalidateAlbumsCache() // 캐시 무효화
 
 	c.Status(http.StatusNoContent) // 204
 }
