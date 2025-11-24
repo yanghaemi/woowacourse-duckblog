@@ -103,6 +103,7 @@ RPS가 소폭 상승하고, 평균·p95 지연시간이 눈에 띄게 감소했�
 | **dropped_iterations**    | 101 (약 2회/s) |
 
 [DB 결과]
+<img width="368" height="304" alt="스크린샷 2025-11-24 234717" src="https://github.com/user-attachments/assets/a2fc051d-42ad-4c7c-9b0b-cd44d8bb36bc" />
 
 ---
 
