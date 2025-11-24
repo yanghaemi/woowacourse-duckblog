@@ -44,7 +44,7 @@ func initDB() {
 	dbPort := getEnv("DB_PORT", "3310")
 	dbName := getEnv("DB_NAME", "duckblog")
 	dbUser := getEnv("DB_USER", "root")
-	dbPass := getEnv("DB_PASSWORD", "heau1815!")
+	dbPass := getEnv("DB_PASSWORD", "")
 
 	// DSN 구성
 	dsn := fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?charset=utf8mb4&parseTime=True&loc=Local",
